@@ -1,0 +1,13 @@
+# Crea o corrige el administrador del panel (idempotente).
+import os
+from django.contrib.auth import get_user_model
+
+U = get_user_model()
+nombre, clave = os.environ["ADMIN_USUARIO"], os.environ["ADMIN_PASSWORD"]
+u, creado = U.objects.get_or_create(username=nombre)
+cambio = creado or not (u.check_password(clave) and u.is_staff and u.is_superuser and u.is_active)
+if cambio:
+    u.set_password(clave)
+    u.is_staff = u.is_superuser = u.is_active = True
+    u.save()
+print("CAMBIO" if cambio else "OK")

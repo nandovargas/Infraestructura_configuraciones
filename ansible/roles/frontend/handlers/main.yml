@@ -1,0 +1,9 @@
+- name: Recargar nginx
+  ansible.builtin.command: nginx -t
+  changed_when: false
+  notify: Recargar nginx (servicio)
+
+- name: Recargar nginx (servicio)
+  ansible.builtin.service:
+    name: nginx
+    state: reloaded

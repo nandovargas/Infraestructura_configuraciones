@@ -1,0 +1,39 @@
+# {{ ansible_managed }}
+# Prometheus del tenant. Las etiquetas externas identifican al tenant cuando el
+# Prometheus central de la instancia de monitoreo federa estas series.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    tenant: "{{ tenant_id }}"
+    entorno: "{{ entorno }}"
+    plan: "{{ plan }}"
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels: { rol: backend }
+
+  # Django (django-prometheus en /metrics): peticiones, latencia, errores, BD
+  - job_name: django
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:8000"]
+        labels: { rol: backend }
+
+  # Sistema operativo de las 3 máquinas del tenant (CPU, memoria, disco)
+  - job_name: node
+    static_configs:
+      - targets: ["localhost:9100"]
+        labels: { rol: backend }
+      - targets: ["{{ frontend_private_ip }}:9100"]
+        labels: { rol: frontend }
+      - targets: ["{{ bd_private_ip }}:9100"]
+        labels: { rol: bd }
+
+  # Estado de PostgreSQL
+  - job_name: postgres
+    static_configs:
+      - targets: ["{{ bd_private_ip }}:9187"]
+        labels: { rol: bd }

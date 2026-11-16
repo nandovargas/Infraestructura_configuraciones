@@ -1,0 +1,25 @@
+#cloud-config
+# Configuración inicial de la instancia backend (primer arranque).
+hostname: ${hostname}
+fqdn: ${hostname}
+manage_etc_hosts: true
+timezone: America/La_Paz
+
+package_update: true
+packages:
+  - acl
+  - rsync
+  - postgresql-client   # para verificar la conexión a la BD (pg_isready)
+
+write_files:
+  # Datos de infraestructura que conoce Terraform al crear la máquina
+  - path: /etc/asistencia/infra.env
+    permissions: "0644"
+    content: |
+      DB_HOST=${bd_ip}
+      DB_PORT=5432
+
+runcmd:
+  - install -d -o ubuntu -g ubuntu /opt/asistencia/backend/app
+
+final_message: "cloud-init backend terminado en $UPTIME s"

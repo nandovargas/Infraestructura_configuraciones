@@ -1,0 +1,104 @@
+- name: Copiar el código del backend
+  ansible.posix.synchronize:
+    src: "{{ repo_dir }}/asistencia_backend/"
+    dest: "{{ backend_dir }}/app/"
+    delete: true
+    owner: false
+    group: false
+    rsync_opts:
+      - "--chmod=D755,F644"
+      - "--exclude=venv/"
+      - "--exclude=__pycache__/"
+      - "--exclude=*.pyc"
+      - "--exclude=.env"
+      - "--exclude=*.log"
+      - "--exclude=*.err"
+      - "--exclude=staticfiles/"
+      - "--exclude=db.sqlite3"
+  become: false
+  notify: Reiniciar backend
+
+- name: Archivo .env de Django
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ backend_dir }}/app/.env"
+    owner: ubuntu
+    group: ubuntu
+    mode: "0600"
+  notify: Reiniciar backend
+
+- name: Dependencias de Python en el virtualenv de la AMI
+  ansible.builtin.pip:
+    requirements: "{{ backend_dir }}/app/requirements.txt"
+    virtualenv: "{{ backend_dir }}/venv"
+  become_user: ubuntu
+  notify: Reiniciar backend
+
+- name: Esperar a que PostgreSQL acepte conexiones desde el backend
+  ansible.builtin.command: pg_isready -h {{ bd_private_ip }} -p 5432 -d {{ db_name }} -U {{ db_user }}
+  register: pg
+  until: pg.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+
+- name: Migraciones de Django
+  ansible.builtin.command:
+    cmd: "{{ backend_dir }}/venv/bin/python manage.py migrate --noinput"
+    chdir: "{{ backend_dir }}/app"
+  become_user: ubuntu
+  register: migrate
+  changed_when: "'No migrations to apply' not in migrate.stdout"
+
+- name: Usuario administrador {{ admin_usuario }}
+  ansible.builtin.command:
+    cmd: "{{ backend_dir }}/venv/bin/python manage.py shell"
+    chdir: "{{ backend_dir }}/app"
+    stdin: "{{ lookup('ansible.builtin.template', 'crear_admin.py.j2') }}"
+  environment:
+    ADMIN_USUARIO: "{{ admin_usuario }}"
+    ADMIN_PASSWORD: "{{ admin_password }}"
+  become_user: ubuntu
+  register: admin
+  changed_when: "'CAMBIO' in admin.stdout"
+
+- name: ¿Hay módulos cargados?
+  ansible.builtin.command:
+    cmd: "{{ backend_dir }}/venv/bin/python manage.py shell -c \"from asistencia.models import Modulo; print(Modulo.objects.count())\""
+    chdir: "{{ backend_dir }}/app"
+  become_user: ubuntu
+  register: modulos
+  changed_when: false
+  when: cargar_demo | bool
+
+- name: Datos de demostración (solo con la base vacía)
+  ansible.builtin.command:
+    cmd: "{{ backend_dir }}/venv/bin/python manage.py crear_demo"
+    chdir: "{{ backend_dir }}/app"
+  become_user: ubuntu
+  when: cargar_demo | bool and (modulos.stdout_lines | last | trim) == '0'
+
+- name: Servicio systemd de gunicorn
+  ansible.builtin.template:
+    src: asistencia-backend.service.j2
+    dest: /etc/systemd/system/asistencia-backend.service
+    mode: "0644"
+  notify: Reiniciar backend
+
+- name: Backend habilitado y en marcha
+  ansible.builtin.systemd_service:
+    name: asistencia-backend
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Aplicar reinicios pendientes
+  ansible.builtin.meta: flush_handlers
+
+- name: La API responde
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8000/api/modulo-activo/
+  register: api
+  until: api.status == 200
+  retries: 12
+  delay: 5

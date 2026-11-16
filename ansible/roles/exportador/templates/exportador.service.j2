@@ -1,0 +1,17 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Prometheus {{ exp_nombre }}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ exp_usuario }}
+Group={{ exp_usuario }}
+{% for k, v in (exp_entorno | default({})).items() %}
+Environment="{{ k }}={{ v }}"
+{% endfor %}
+ExecStart=/opt/{{ exp_nombre }}-{{ exp_version }}/{{ exp_nombre }} {{ exp_args }}
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,42 @@
+# Instancia de monitoreo compartida: Prometheus central (federa el Prometheus de cada
+# backend de tenant, descubiertos por etiquetas EC2) + reglas de alerta + Grafana.
+- name: Esperar a que la instancia termine cloud-init
+  hosts: monitoreo
+  gather_facts: false
+  roles: [comun]
+  tags: [always]
+
+- name: Prometheus central y Grafana
+  hosts: monitoreo
+  become: true
+  roles: [monitoreo]
+
+- name: Verificación desde el nodo de control
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    m: "{{ hostvars[groups['monitoreo'][0]] }}"
+  tasks:
+    - name: Grafana responde
+      ansible.builtin.uri:
+        url: "http://{{ m.ansible_host }}:3000/api/health"
+      register: salud
+      until: salud.status == 200
+      retries: 10
+      delay: 5
+
+    - name: Prometheus central cargó las reglas de alerta
+      ansible.builtin.uri:
+        url: "http://{{ m.ansible_host }}:9090/api/v1/rules"
+        return_content: true
+      register: reglas
+      failed_when: reglas.json.data.groups | length == 0
+
+    - name: Resumen
+      ansible.builtin.debug:
+        msg:
+          - "Grafana:    http://{{ m.ansible_host }}:3000  (usuario admin)"
+          - "Prometheus: http://{{ m.ansible_host }}:9090"
+          - "Reglas de alerta: {{ reglas.json.data.groups | map(attribute='rules') | flatten | length }}"
+  tags: [always, verificar]

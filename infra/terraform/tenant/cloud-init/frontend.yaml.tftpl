@@ -1,0 +1,29 @@
+#cloud-config
+# Configuración inicial de la instancia frontend (primer arranque).
+hostname: ${hostname}
+fqdn: ${hostname}
+manage_etc_hosts: true
+timezone: America/La_Paz
+
+package_update: true
+packages:
+  - acl
+  - rsync
+
+# 1 GB de swap para que "vite build" no se quede sin memoria en una t3.small
+swap:
+  filename: /swapfile
+  size: 1073741824
+
+write_files:
+  # Página temporal hasta que Ansible publique el build de React
+  - path: /var/www/asistencia/index.html
+    permissions: "0644"
+    content: |
+      <!doctype html><meta charset="utf-8"><title>Asistencia</title>
+      <p>Desplegando la aplicación…</p>
+
+runcmd:
+  - chown -R ubuntu:ubuntu /opt/asistencia/frontend
+
+final_message: "cloud-init frontend terminado en $UPTIME s"

@@ -1,0 +1,91 @@
+# Configuración posterior de las máquinas de UN tenant (Terraform + cloud-init ya las crearon).
+# La plataforma genera el inventario con los datos del tenant y lo ejecuta en un contenedor.
+- name: Esperar a que las instancias terminen cloud-init
+  hosts: all
+  gather_facts: false
+  roles: [comun]
+  tags: [always]
+
+- name: Exportador de métricas del sistema (node_exporter) en las 3 máquinas
+  hosts: frontend:backend:bd
+  become: true
+  roles:
+    - role: exportador
+      vars:
+        exp_nombre: node_exporter
+        exp_repo: prometheus/node_exporter
+        exp_version: "{{ node_exporter_version }}"
+        exp_usuario: node_exporter
+        exp_args: "--web.listen-address=:9100"
+  tags: [exportadores, bd, backend, frontend]
+
+- name: Base de datos PostgreSQL
+  hosts: bd
+  become: true
+  roles: [bd]
+  tags: [bd]
+
+- name: Backend Django (gunicorn) y Prometheus
+  hosts: backend
+  become: true
+  roles: [backend, prometheus]
+  tags: [backend]
+
+- name: Frontend React (build de Vite servido por nginx)
+  hosts: frontend
+  become: true
+  roles: [frontend]
+  tags: [frontend]
+
+- name: Verificación de extremo a extremo (desde el nodo de control)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ip: "{{ hostvars[groups['backend'][0]] }}"
+  tasks:
+    - name: El frontend responde con la SPA
+      ansible.builtin.uri:
+        url: "http://{{ ip.frontend_public_ip }}/panel/login"
+        headers: { Host: "{{ ip.frontend_url | urlsplit('hostname') }}" }
+        return_content: true
+      register: front
+      until: front.status == 200 and '<div id="root">' in front.content
+      retries: 20
+      delay: 6
+
+    - name: Login del admin en la API (como lo hace el navegador desde el frontend)
+      ansible.builtin.uri:
+        url: "{{ ip.backend_url }}/panel/login/"
+        method: POST
+        body_format: json
+        body: { username: "{{ ip.admin_usuario }}", password: "{{ ip.admin_password }}" }
+        headers: { Origin: "{{ ip.frontend_url }}" }
+      register: login
+      until: login.status == 200
+      retries: 20
+      delay: 6
+      failed_when: >-
+        login.status != 200 or 'token' not in login.json
+        or login.access_control_allow_origin | default('') != ip.frontend_url
+
+    - name: Prometheus tiene todos sus objetivos activos
+      ansible.builtin.uri:
+        url: "http://{{ ip.backend_public_ip }}:9090/api/v1/targets"
+        return_content: true
+      register: targets
+      until: targets.status == 200 and targets.json.data.activeTargets | selectattr('health', 'equalto', 'up') | list | length == 6
+      retries: 20
+      delay: 6
+      failed_when: >-
+        targets.json.data.activeTargets | length != 6 or
+        targets.json.data.activeTargets | rejectattr('health', 'equalto', 'up') | list | length > 0
+
+    - name: Resumen
+      ansible.builtin.debug:
+        msg:
+          - "Tenant:     {{ ip.tenant_id }} ({{ ip.entorno }}, plan {{ ip.plan }})"
+          - "Frontend:   {{ ip.frontend_url }}  (panel: {{ ip.frontend_url }}/panel/login, usuario {{ ip.admin_usuario }})"
+          - "API:        {{ ip.backend_url }}"
+          - "Prometheus: http://{{ ip.backend_public_ip }}:9090  objetivos activos: {{ targets.json.data.activeTargets | length }}"
+  tags: [always, verificar]

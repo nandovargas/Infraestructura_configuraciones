@@ -1,0 +1,46 @@
+- name: PostgreSQL activo
+  ansible.builtin.service:
+    name: postgresql
+    state: started
+    enabled: true
+
+- name: Ajustes de PostgreSQL para una t3.small
+  ansible.builtin.template:
+    src: 91-ansible.conf.j2
+    dest: /etc/postgresql/16/main/conf.d/91-ansible.conf
+    mode: "0644"
+  notify: Reiniciar postgresql
+
+# cloud-init abrió el acceso a toda la VPC (al crear la BD aún no existía el backend);
+# ahora que se conoce la IP privada del backend, se restringe solo a ella.
+- name: Acceso a la base solo desde la IP privada del backend
+  ansible.builtin.lineinfile:
+    path: /etc/postgresql/16/main/pg_hba.conf
+    regexp: '^host\s+{{ db_name }}\s+{{ db_user }}\s+'
+    line: "host    {{ db_name }}    {{ db_user }}    {{ backend_private_ip }}/32    scram-sha-256"
+  notify: Recargar postgresql
+
+- name: Comprobar que existen el usuario y la base creados por cloud-init
+  ansible.builtin.command: >-
+    psql -tAc "SELECT count(*) FROM pg_database d JOIN pg_roles r ON d.datdba = r.oid
+    WHERE d.datname = '{{ db_name }}' AND r.rolname = '{{ db_user }}'"
+  become_user: postgres
+  register: existe
+  changed_when: false
+  failed_when: existe.stdout | trim != '1'
+
+- name: Aplicar cambios pendientes de PostgreSQL antes de seguir
+  ansible.builtin.meta: flush_handlers
+
+# Métricas de PostgreSQL (pg_up, conexiones, tamaño). Se conecta por socket local como postgres.
+- name: postgres_exporter
+  ansible.builtin.include_role:
+    name: exportador
+  vars:
+    exp_nombre: postgres_exporter
+    exp_repo: prometheus-community/postgres_exporter
+    exp_version: "{{ postgres_exporter_version }}"
+    exp_usuario: postgres
+    exp_args: "--web.listen-address=:9187"
+    exp_entorno:
+      DATA_SOURCE_NAME: "user=postgres host=/var/run/postgresql sslmode=disable"

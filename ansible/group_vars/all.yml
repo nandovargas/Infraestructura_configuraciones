@@ -1,0 +1,24 @@
+# Raíz del repositorio (el contenedor la monta en /repo)
+repo_dir: "{{ playbook_dir }}/.."
+
+# Usuario administrador de la aplicación (login del panel en el frontend)
+admin_usuario: admin
+# La plataforma genera una contraseña por tenant y la pasa en el inventario
+admin_password: admin1234
+# Carga el módulo de demostración (crear_demo) si la base no tiene módulos
+cargar_demo: true
+
+backend_dir: /opt/asistencia/backend
+frontend_dir: /opt/asistencia/frontend
+backend_url: "http://{{ backend_public_ip }}:8000/api"
+frontend_url: "http://{{ frontend_public_ip }}"
+
+node_exporter_version: "1.9.1"
+postgres_exporter_version: "0.17.1"
+
+# Identidad del tenant y límites del plan (los define la plataforma en el inventario)
+tenant_id: asistencia
+entorno: dev
+plan: unico
+max_estudiantes: 0      # 0 = sin límite
+gunicorn_threads: 8

@@ -1,0 +1,4 @@
+# Generados por Terraform (contienen secretos e IPs)
+inventario.ini
+.secretos/
+*.retry

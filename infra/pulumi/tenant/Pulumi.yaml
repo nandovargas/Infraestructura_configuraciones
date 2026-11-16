@@ -1,0 +1,10 @@
+# Proyecto Pulumi del stack de UN tenant (equivalente a infra/terraform/tenant).
+# La plataforma reescribe "virtualenv" con la ruta absoluta del entorno compartido
+# (plataforma/datos/cache/pulumi-venv) y crea un stack por tenant en su backend de estado.
+name: asistencia-tenant
+description: Infraestructura de un tenant de Asistencia SaaS (3 EC2, SG, IP elásticas, secretos)
+runtime:
+  name: python
+  options:
+    toolchain: pip
+    virtualenv: venv

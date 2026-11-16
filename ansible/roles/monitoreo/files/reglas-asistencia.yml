@@ -1,0 +1,97 @@
+# Reglas de alerta del Prometheus central. Todas llevan las etiquetas tenant y entorno
+# (vienen de la federación) para que la plataforma muestre el tenant afectado.
+groups:
+  - name: disponibilidad
+    rules:
+      - alert: TenantInalcanzable
+        expr: up{job="federacion"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No responde el Prometheus del backend del tenant {{ $labels.tenant }} ({{ $labels.entorno }})"
+          description: "La instancia backend no responde en el puerto 9090: puede estar caída o sin red."
+
+      - alert: ServicioCaido
+        expr: up{job=~"django|node|postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "El servicio {{ $labels.job }} ({{ $labels.rol }}) del tenant {{ $labels.tenant }} dejó de responder"
+          description: "Objetivo {{ $labels.instance }} sin respuesta desde hace más de 1 minuto."
+
+      - alert: BaseDeDatosCaida
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL del tenant {{ $labels.tenant }} no acepta conexiones"
+          description: "postgres_exporter no puede conectarse a la base de datos."
+
+  - name: errores-y-latencia
+    rules:
+      - alert: ErroresBackendAltos
+        expr: |
+          sum by (tenant, entorno) (rate(django_http_responses_total_by_status_total{status=~"5.."}[5m]))
+            / clamp_min(sum by (tenant, entorno) (rate(django_http_responses_total_by_status_total[5m])), 0.001)
+            > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Más del 5% de respuestas con error 5xx en el backend de {{ $labels.tenant }}"
+          description: "Tasa de error actual: {{ $value | humanizePercentage }}."
+
+      - alert: LatenciaAlta
+        expr: |
+          histogram_quantile(0.95,
+            sum by (tenant, entorno, le) (rate(django_http_requests_latency_seconds_by_view_method_bucket[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Latencia p95 del backend de {{ $labels.tenant }} sobre 1 s"
+          description: "p95 actual: {{ $value | humanizeDuration }}."
+
+  - name: limites-de-recursos
+    rules:
+      - alert: CPUAlta
+        expr: 100 * (1 - avg by (tenant, entorno, rol) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU de {{ $labels.rol }} del tenant {{ $labels.tenant }} sobre 85%"
+          description: "Uso actual: {{ $value | printf \"%.0f\" }}%. Considere un plan superior."
+
+      - alert: MemoriaAlta
+        expr: 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memoria de {{ $labels.rol }} del tenant {{ $labels.tenant }} sobre 90%"
+          description: "Uso actual: {{ $value | printf \"%.0f\" }}%."
+
+      - alert: DiscoCasiLleno
+        expr: 100 * (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disco de {{ $labels.rol }} del tenant {{ $labels.tenant }} sobre 85%"
+          description: "Uso actual: {{ $value | printf \"%.0f\" }}%."
+
+      - alert: ConexionesBDAltas
+        expr: |
+          sum by (tenant, entorno) (pg_stat_activity_count)
+            / max by (tenant, entorno) (pg_settings_max_connections) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL de {{ $labels.tenant }} usa más del 80% de sus conexiones"
+          description: "Conexiones en uso: {{ $value | humanizePercentage }}."

@@ -1,0 +1,78 @@
+# La frontend_ami trae Node, nginx y node_modules en {{ frontend_dir }}.
+- name: Copiar el código del frontend (sin node_modules)
+  ansible.posix.synchronize:
+    src: "{{ repo_dir }}/asistencia_frontend/"
+    dest: "{{ frontend_dir }}/"
+    delete: true
+    owner: false
+    group: false
+    rsync_opts:
+      - "--chmod=D755,F644"
+      - "--exclude=node_modules/"
+      - "--exclude=dist/"
+      - "--exclude=.git/"
+      - "--exclude=.env"
+      - "--exclude=.env.*.local"
+  become: false
+  register: codigo
+
+- name: URL del backend para el build de producción
+  ansible.builtin.copy:
+    dest: "{{ frontend_dir }}/.env.production.local"
+    content: |
+      # Gestionado por Ansible
+      VITE_API_URL={{ backend_url }}
+    owner: ubuntu
+    group: ubuntu
+    mode: "0644"
+  register: env_front
+
+- name: ¿Las dependencias npm de la AMI coinciden con package-lock.json?
+  ansible.builtin.command: npm ls --depth=0
+  args: { chdir: "{{ frontend_dir }}" }
+  become_user: ubuntu
+  register: npm_ls
+  changed_when: false
+  failed_when: false
+
+- name: Reinstalar dependencias npm si cambiaron
+  ansible.builtin.command: npm ci
+  args: { chdir: "{{ frontend_dir }}" }
+  become_user: ubuntu
+  when: npm_ls.rc != 0
+
+- name: ¿Existe un build previo?
+  ansible.builtin.stat:
+    path: "{{ frontend_dir }}/dist/index.html"
+  register: dist
+
+- name: Compilar con Vite (npm run build)
+  ansible.builtin.command: npm run build
+  args: { chdir: "{{ frontend_dir }}" }
+  become_user: ubuntu
+  when: codigo.changed or env_front.changed or npm_ls.rc != 0 or not dist.stat.exists
+
+- name: Publicar el build en nginx
+  ansible.builtin.command: rsync -a --delete --itemize-changes {{ frontend_dir }}/dist/ /var/www/asistencia/
+  register: publicar
+  changed_when: publicar.stdout | length > 0
+
+- name: Sitio de nginx (SPA + caché de assets + gzip)
+  ansible.builtin.template:
+    src: nginx-asistencia.conf.j2
+    dest: /etc/nginx/sites-available/asistencia
+    mode: "0644"
+  notify: Recargar nginx
+
+- name: nginx habilitado y en marcha
+  ansible.builtin.service:
+    name: nginx
+    state: started
+    enabled: true
+
+- name: Aplicar cambios pendientes
+  ansible.builtin.meta: flush_handlers
+
+- name: El build publicado apunta al backend correcto
+  ansible.builtin.shell: grep -rlF "{{ backend_url }}" /var/www/asistencia/assets/
+  changed_when: false

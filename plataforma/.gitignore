@@ -1,0 +1,7 @@
+# Datos de ejecución: base de la plataforma, estado local de Terraform (¡secretos!),
+# copias de trabajo, registros y el hash del administrador.
+datos/
+.venv/
+__pycache__/
+*.pyc
+.streamlit/secrets.toml

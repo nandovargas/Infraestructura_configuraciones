@@ -1,0 +1,56 @@
+# Prometheus ya viene instalado (deshabilitado) en la backend_ami de Packer.
+# Aquí se configuran los objetivos (etiquetados con el tenant) y se activa el servicio.
+
+- name: Directorio de ajustes del servicio prometheus
+  ansible.builtin.file:
+    path: /etc/systemd/system/prometheus.service.d
+    state: directory
+    mode: "0755"
+
+- name: Permitir recargar Prometheus (SIGHUP) con systemctl reload
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/prometheus.service.d/override.conf
+    mode: "0644"
+    content: |
+      [Service]
+      ExecReload=/bin/kill -HUP $MAINPID
+  notify: Reiniciar prometheus
+
+- name: Objetivos de Prometheus del tenant
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: /etc/prometheus/prometheus.yml
+    owner: prometheus
+    group: prometheus
+    mode: "0644"
+    validate: /usr/local/bin/promtool check config %s
+  notify: Reiniciar prometheus
+
+- name: Prometheus habilitado y en marcha
+  ansible.builtin.systemd_service:
+    name: prometheus
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Aplicar cambios pendientes
+  ansible.builtin.meta: flush_handlers
+
+- name: Prometheus listo
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9090/-/ready
+  register: listo
+  until: listo.status == 200
+  retries: 12
+  delay: 5
+
+- name: Todos los objetivos en estado "up"
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9090/api/v1/targets
+    return_content: true
+  register: objetivos
+  until: >-
+    objetivos.json.data.activeTargets | length == 6 and
+    objetivos.json.data.activeTargets | rejectattr('health', 'equalto', 'up') | list | length == 0
+  retries: 10
+  delay: 6

@@ -1,0 +1,23 @@
+# {{ ansible_managed }}
+server {
+    listen 80 default_server;
+    server_name _;
+    root /var/www/asistencia;
+    index index.html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    # Los archivos de Vite llevan hash en el nombre: se pueden cachear mucho tiempo
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # SPA: cualquier ruta de react-router devuelve index.html (sin caché)
+    location / {
+        add_header Cache-Control "no-cache";
+        try_files $uri /index.html;
+    }
+}

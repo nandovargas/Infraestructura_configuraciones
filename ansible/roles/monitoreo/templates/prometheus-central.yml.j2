@@ -1,0 +1,43 @@
+# {{ ansible_managed }}
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/reglas/*.yml
+
+scrape_configs:
+  - job_name: prometheus-central
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Federación: trae todas las series del Prometheus de cada backend de tenant.
+  # Los backends se descubren solos por sus etiquetas EC2 (los crea la plataforma);
+  # un tenant suspendido (instancias detenidas) desaparece de la lista y no genera alertas.
+  - job_name: federacion
+    honor_labels: true
+    metrics_path: /federate
+    params:
+      "match[]": ['{job=~".+"}']
+    ec2_sd_configs:
+      - region: "{{ aws_region }}"
+        port: 9090
+        filters:
+          - name: tag:Plataforma
+            values: [asistencia-saas]
+          - name: tag:Rol
+            values: [backend]
+          - name: instance-state-name
+            values: [running]
+    relabel_configs:
+      - source_labels: [__meta_ec2_private_ip]
+        target_label: __address__
+        replacement: "$1:9090"
+      - source_labels: [__meta_ec2_tag_Tenant]
+        target_label: tenant
+      - source_labels: [__meta_ec2_tag_Entorno]
+        target_label: entorno
+      - source_labels: [__meta_ec2_tag_Plan]
+        target_label: plan
+      - source_labels: [__meta_ec2_instance_id]
+        target_label: instancia_ec2

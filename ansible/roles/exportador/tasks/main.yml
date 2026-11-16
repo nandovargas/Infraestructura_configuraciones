@@ -1,0 +1,51 @@
+# Instala un exportador oficial de Prometheus (binario de GitHub verificado con sha256)
+# y lo deja como servicio systemd. Variables:
+#   exp_nombre   node_exporter | postgres_exporter
+#   exp_repo     prometheus/node_exporter | prometheus-community/postgres_exporter
+#   exp_version  versión sin "v"
+#   exp_usuario  usuario del servicio (se crea si no existe y no es "postgres")
+#   exp_args     argumentos del binario
+#   exp_entorno  variables de entorno del servicio (dict, opcional)
+- name: Usuario de sistema para {{ exp_nombre }}
+  ansible.builtin.user:
+    name: "{{ exp_usuario }}"
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+  when: exp_usuario != 'postgres'
+
+- name: Descargar {{ exp_nombre }} {{ exp_version }} (verificando sha256)
+  ansible.builtin.get_url:
+    url: "https://github.com/{{ exp_repo }}/releases/download/v{{ exp_version }}/{{ exp_nombre }}-{{ exp_version }}.linux-amd64.tar.gz"
+    dest: "/tmp/{{ exp_nombre }}-{{ exp_version }}.tar.gz"
+    checksum: "sha256:https://github.com/{{ exp_repo }}/releases/download/v{{ exp_version }}/sha256sums.txt"
+    mode: "0644"
+
+- name: Directorio de la versión {{ exp_version }}
+  ansible.builtin.file:
+    path: "/opt/{{ exp_nombre }}-{{ exp_version }}"
+    state: directory
+    mode: "0755"
+
+- name: Extraer {{ exp_nombre }}
+  ansible.builtin.unarchive:
+    src: "/tmp/{{ exp_nombre }}-{{ exp_version }}.tar.gz"
+    dest: "/opt/{{ exp_nombre }}-{{ exp_version }}"
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    creates: "/opt/{{ exp_nombre }}-{{ exp_version }}/{{ exp_nombre }}"
+  register: exp_binario
+
+- name: Servicio systemd de {{ exp_nombre }}
+  ansible.builtin.template:
+    src: exportador.service.j2
+    dest: "/etc/systemd/system/{{ exp_nombre }}.service"
+    mode: "0644"
+  register: exp_servicio
+
+- name: "{{ exp_nombre }} habilitado y en marcha"
+  ansible.builtin.systemd_service:
+    name: "{{ exp_nombre }}"
+    enabled: true
+    daemon_reload: true
+    state: "{{ 'restarted' if (exp_binario.changed or exp_servicio.changed) else 'started' }}"

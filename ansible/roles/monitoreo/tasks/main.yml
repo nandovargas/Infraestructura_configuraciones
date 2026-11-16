@@ -1,0 +1,191 @@
+# ---------- Prometheus central ----------
+- name: Usuario de sistema prometheus
+  ansible.builtin.user:
+    name: prometheus
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: Descargar Prometheus {{ prometheus_version }} (verificando sha256)
+  ansible.builtin.get_url:
+    url: "https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz"
+    dest: "/tmp/prometheus-{{ prometheus_version }}.tar.gz"
+    checksum: "sha256:https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/sha256sums.txt"
+    mode: "0644"
+
+- name: Directorios de Prometheus
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "0755"
+  loop:
+    - { path: "/opt/prometheus-{{ prometheus_version }}", owner: root }
+    - { path: /etc/prometheus, owner: prometheus }
+    - { path: /etc/prometheus/reglas, owner: prometheus }
+    - { path: /var/lib/prometheus, owner: prometheus }
+
+- name: Extraer Prometheus
+  ansible.builtin.unarchive:
+    src: "/tmp/prometheus-{{ prometheus_version }}.tar.gz"
+    dest: "/opt/prometheus-{{ prometheus_version }}"
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    creates: "/opt/prometheus-{{ prometheus_version }}/prometheus"
+  notify: Reiniciar prometheus
+
+- name: Enlaces a los binarios
+  ansible.builtin.file:
+    src: "/opt/prometheus-{{ prometheus_version }}/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    state: link
+  loop: [prometheus, promtool]
+
+- name: Reglas de alerta (servicio caído, errores, latencia, límites de recursos)
+  ansible.builtin.copy:
+    src: reglas-asistencia.yml
+    dest: /etc/prometheus/reglas/asistencia.yml
+    owner: prometheus
+    group: prometheus
+    mode: "0644"
+    validate: /usr/local/bin/promtool check rules %s
+  notify: Reiniciar prometheus
+
+- name: Configuración del Prometheus central (federación por descubrimiento EC2)
+  ansible.builtin.template:
+    src: prometheus-central.yml.j2
+    dest: /etc/prometheus/prometheus.yml
+    owner: prometheus
+    group: prometheus
+    mode: "0644"
+    validate: /usr/local/bin/promtool check config --syntax-only %s
+  notify: Reiniciar prometheus
+
+- name: Servicio systemd de Prometheus
+  ansible.builtin.template:
+    src: prometheus.service.j2
+    dest: /etc/systemd/system/prometheus.service
+    mode: "0644"
+  notify: Reiniciar prometheus
+
+- name: Prometheus habilitado y en marcha
+  ansible.builtin.systemd_service:
+    name: prometheus
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# ---------- Grafana ----------
+- name: Clave del repositorio de Grafana
+  ansible.builtin.get_url:
+    url: https://apt.grafana.com/gpg.key
+    dest: /etc/apt/keyrings/grafana.asc
+    mode: "0644"
+
+- name: Repositorio APT de Grafana
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main"
+    filename: grafana
+    state: present
+
+- name: Instalar Grafana
+  ansible.builtin.apt:
+    name: grafana
+    state: present
+    update_cache: true
+
+- name: Ajustes de Grafana (sin registro público ni acceso anónimo)
+  ansible.builtin.template:
+    src: grafana.ini.j2
+    dest: /etc/grafana/grafana.ini
+    owner: root
+    group: grafana
+    mode: "0640"
+  notify: Reiniciar grafana
+
+- name: Fuente de datos (Prometheus central)
+  ansible.builtin.copy:
+    dest: /etc/grafana/provisioning/datasources/prometheus.yml
+    owner: root
+    group: grafana
+    mode: "0640"
+    content: |
+      apiVersion: 1
+      datasources:
+        - name: Prometheus central
+          uid: prometheus-central
+          type: prometheus
+          access: proxy
+          url: http://localhost:9090
+          isDefault: true
+          editable: false
+  notify: Reiniciar grafana
+
+- name: Proveedor de dashboards
+  ansible.builtin.copy:
+    dest: /etc/grafana/provisioning/dashboards/asistencia.yml
+    owner: root
+    group: grafana
+    mode: "0640"
+    content: |
+      apiVersion: 1
+      providers:
+        - name: asistencia
+          folder: Asistencia SaaS
+          type: file
+          disableDeletion: true
+          allowUiUpdates: false
+          options:
+            path: /var/lib/grafana/dashboards
+  notify: Reiniciar grafana
+
+- name: Directorio de dashboards
+  ansible.builtin.file:
+    path: /var/lib/grafana/dashboards
+    state: directory
+    owner: grafana
+    group: grafana
+    mode: "0755"
+
+- name: Dashboard "Salud de los tenants"
+  ansible.builtin.copy:
+    src: dashboard-tenants.json
+    dest: /var/lib/grafana/dashboards/tenants.json
+    owner: grafana
+    group: grafana
+    mode: "0644"
+
+- name: Grafana habilitado y en marcha
+  ansible.builtin.systemd_service:
+    name: grafana-server
+    enabled: true
+    state: started
+
+- name: Aplicar cambios pendientes
+  ansible.builtin.meta: flush_handlers
+
+- name: Esperar a Grafana
+  ansible.builtin.uri:
+    url: http://127.0.0.1:3000/api/health
+  register: salud
+  until: salud.status == 200
+  retries: 20
+  delay: 3
+
+- name: Contraseña del administrador de Grafana (sale del estado cifrado de Terraform)
+  ansible.builtin.command:
+    argv: [grafana, cli, --homepath, /usr/share/grafana, --config, /etc/grafana/grafana.ini,
+           admin, reset-admin-password, "{{ grafana_admin_password }}"]
+  become_user: grafana
+  changed_when: false
+  no_log: true
+  when: grafana_admin_password | length > 0
+
+- name: Prometheus central listo
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9090/-/ready
+  register: listo
+  until: listo.status == 200
+  retries: 12
+  delay: 5
